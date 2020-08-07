@@ -1,30 +1,16 @@
-/*
-
-  Copyright 2017 Loopring Project Ltd (Loopring Foundation).
-
-  Licensed under the Apache License, Version 2.0 (the "License");
-  you may not use this file except in compliance with the License.
-  You may obtain a copy of the License at
-
-  http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
-  limitations under the License.
-*/
-pragma solidity ^0.6.6;
-
-import "../lib/MathUint.sol";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017 Loopring Technology Limited.
+pragma solidity ^0.7.0;
 
 import "../base/DataStore.sol";
+import "../lib/MathUint.sol";
+import "../lib/Claimable.sol";
 
 
 /// @title QuotaStore
 /// @dev This store maintains daily spending quota for each wallet.
 ///      A rolling daily limit is used.
-contract QuotaStore is DataStore
+contract QuotaStore is DataStore, Claimable
 {
     using MathUint for uint;
 
@@ -41,16 +27,34 @@ contract QuotaStore is DataStore
 
     mapping (address => Quota) public quotas;
 
+    event DefaultQuotaChanged(
+        uint prevValue,
+        uint currentValue
+    );
+
     event QuotaScheduled(
-        address indexed wallet,
-        uint            pendingQuota,
-        uint64          pendingUntil
+        address wallet,
+        uint    pendingQuota,
+        uint64  pendingUntil
     );
 
     constructor(uint _defaultQuota)
-        public
         DataStore()
     {
+        defaultQuota = _defaultQuota;
+    }
+
+    function changeDefaultQuota(uint _defaultQuota)
+        external
+        onlyOwner
+    {
+        require(
+            _defaultQuota != defaultQuota &&
+            _defaultQuota >= 1 ether &&
+            _defaultQuota <= 100 ether,
+            "INVALID_DEFAULT_QUOTA"
+        );
+        emit DefaultQuotaChanged(defaultQuota, _defaultQuota);
         defaultQuota = _defaultQuota;
     }
 
@@ -93,7 +97,7 @@ contract QuotaStore is DataStore
     {
         Quota storage q = quotas[wallet];
         q.spentAmount = spentQuota(wallet).add(amount);
-        q.spentTimestamp = uint64(now);
+        q.spentTimestamp = uint64(block.timestamp);
     }
 
     function currentQuota(address wallet)
@@ -102,7 +106,7 @@ contract QuotaStore is DataStore
         returns (uint)
     {
         Quota storage q = quotas[wallet];
-        uint value = q.pendingUntil <= now ?
+        uint value = q.pendingUntil <= block.timestamp ?
             q.pendingQuota : q.currentQuota;
 
         return value == 0 ? defaultQuota : value;
@@ -117,7 +121,7 @@ contract QuotaStore is DataStore
         )
     {
         Quota storage q = quotas[wallet];
-        if (q.pendingUntil > 0 && q.pendingUntil > now) {
+        if (q.pendingUntil > 0 && q.pendingUntil > block.timestamp) {
             _pendingQuota = q.pendingQuota > 0 ? q.pendingQuota : defaultQuota;
             _pendingUntil = q.pendingUntil;
         }
@@ -129,7 +133,7 @@ contract QuotaStore is DataStore
         returns (uint)
     {
         Quota storage q = quotas[wallet];
-        uint timeSinceLastSpent = now.sub(q.spentTimestamp);
+        uint timeSinceLastSpent = block.timestamp.sub(q.spentTimestamp);
         if (timeSinceLastSpent < 1 days) {
             return q.spentAmount.sub(q.spentAmount.mul(timeSinceLastSpent) / 1 days);
         } else {
